@@ -56,7 +56,7 @@ type requestBodyDecorator struct {
 
 func decorateRequestBody(r *http.Request) *requestBodyDecorator {
 	d := &requestBodyDecorator{
-		body: r.Body,
+		body: &bytes.Buffer{},
 	}
 
 	if r.ContentLength == 0 {
