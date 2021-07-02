@@ -59,7 +59,7 @@ func decorateRequestBody(r *http.Request) *requestBodyDecorator {
 		body: r.Body,
 	}
 
-	if r.ContentLength <= 0 {
+	if r.ContentLength == 0 {
 		return d
 	}
 
