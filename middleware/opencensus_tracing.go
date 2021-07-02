@@ -1,14 +1,13 @@
 package middleware
 
 import (
-	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"math/big"
 	"net/http"
 	"strconv"
-	"time"
 
 	"go.opencensus.io/trace"
 	"go.opencensus.io/trace/propagation"
@@ -26,8 +25,7 @@ func AddTracingSpanToRequest(ctx context.Context, req *http.Request) {
 		return
 	}
 
-	// TODO!!!
-	eID := time.Now().Unix()
+	eID := generateEventID()
 	eIDString := strconv.FormatInt(eID, 10)
 	req.Header.Set(headerNameOpencensusSpanEventIDKey, eIDString)
 	span.AddMessageSendEvent(eID, req.ContentLength, 0)
@@ -40,10 +38,10 @@ func AddTracingSpanToRequest(ctx context.Context, req *http.Request) {
 func OpencensusTracing() func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
-			ww := &responseWriterDecorator{
-				buff: &bytes.Buffer{},
-				w:    w,
-			}
+			ww := decorateResponseWriter(w)
+
+			body := decorateRequestBody(r)
+			r.Body = body
 
 			ctx := r.Context()
 			var span *trace.Span
@@ -61,14 +59,20 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 				ctx, span = trace.StartSpan(ctx, spanName(r))
 			}
 
-			defer span.End()
-
-			body, err := wrapBody(r)
-			if err != nil {
-				// TODO!!! handle error
-				panic(err)
-			}
-			r.Body = body
+			defer func() {
+				if ww.StatusCode() < 400 {
+					span.SetStatus(trace.Status{
+						Code:    trace.StatusCodeOK,
+						Message: "OK",
+					})
+				} else {
+					span.SetStatus(trace.Status{
+						Code:    trace.StatusCodeUnknown,
+						Message: fmt.Sprintf("Response status code: %d", ww.StatusCode()),
+					})
+				}
+				span.End()
+			}()
 
 			span.AddAttributes(trace.StringAttribute("request-payload", string(body.Payload())))
 
@@ -114,63 +118,14 @@ func getSpanContext(r *http.Request) (sc trace.SpanContext, ok bool) {
 	return propagation.FromBinary(bin)
 }
 
-type responseWriterDecorator struct {
-	buff          *bytes.Buffer
-	contentLength int64
+func generateEventID() int64 {
+	maxUint64 := ^uint64(0)
+	maxInt64 := int64(maxUint64 >> 1)
 
-	w http.ResponseWriter
-}
-
-func (d *responseWriterDecorator) Header() http.Header {
-	return d.w.Header()
-}
-
-func (d *responseWriterDecorator) Write(bytes []byte) (int, error) {
-	_, _ = d.buff.Write(bytes)
-	d.contentLength += int64(len(bytes))
-
-	return d.w.Write(bytes)
-}
-
-func (d *responseWriterDecorator) WriteHeader(statusCode int) {
-	d.w.WriteHeader(statusCode)
-}
-
-func (d *responseWriterDecorator) Payload() []byte {
-	return d.buff.Bytes()
-}
-
-func (d *responseWriterDecorator) ContentLength() int64 {
-	return d.contentLength
-}
-
-type requestBodyDecorator struct {
-	buff *bytes.Buffer
-}
-
-func wrapBody(r *http.Request) (*requestBodyDecorator, error) {
-	var buff *bytes.Buffer
-	if r.ContentLength > 0 {
-		b, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			return nil, err
-		}
-		buff = bytes.NewBuffer(b)
+	eID, err := rand.Int(rand.Reader, big.NewInt(maxInt64))
+	if err != nil {
+		return 0
 	}
 
-	return &requestBodyDecorator{
-		buff: buff,
-	}, nil
-}
-
-func (d *requestBodyDecorator) Read(p []byte) (n int, err error) {
-	return d.buff.Read(p)
-}
-
-func (d *requestBodyDecorator) Close() error {
-	return nil
-}
-
-func (d *requestBodyDecorator) Payload() []byte {
-	return d.buff.Bytes()
+	return eID.Int64()
 }
