@@ -41,7 +41,7 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {
 			ww := &responseWriterDecorator{
-				buff: bytes.Buffer{},
+				buff: &bytes.Buffer{},
 				w:    w,
 			}
 
@@ -63,6 +63,15 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 
 			defer span.End()
 
+			body, err := wrapBody(r)
+			if err != nil {
+				// TODO!!! handle error
+				panic(err)
+			}
+			r.Body = body
+
+			span.AddAttributes(trace.StringAttribute("request-payload", string(body.Payload())))
+
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
 			var eID int64
@@ -73,18 +82,8 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 				eID = i
 			}
 
-			span.AddMessageReceiveEvent(eID, ww.ContentSize(), 0)
+			span.AddMessageReceiveEvent(eID, ww.ContentLength(), 0)
 			span.AddAttributes(trace.StringAttribute("response-payload", string(ww.Payload())))
-
-			var responseBytes []byte
-			if r.ContentLength > 0 {
-				body, err := r.GetBody()
-				if err == nil {
-					responseBytes, _ = ioutil.ReadAll(body)
-				}
-			}
-
-			span.AddAttributes(trace.StringAttribute("request-payload", string(responseBytes)))
 		}
 
 		return http.HandlerFunc(fn)
@@ -116,8 +115,10 @@ func getSpanContext(r *http.Request) (sc trace.SpanContext, ok bool) {
 }
 
 type responseWriterDecorator struct {
-	buff bytes.Buffer
-	w    http.ResponseWriter
+	buff          *bytes.Buffer
+	contentLength int64
+
+	w http.ResponseWriter
 }
 
 func (d *responseWriterDecorator) Header() http.Header {
@@ -126,6 +127,8 @@ func (d *responseWriterDecorator) Header() http.Header {
 
 func (d *responseWriterDecorator) Write(bytes []byte) (int, error) {
 	_, _ = d.buff.Write(bytes)
+	d.contentLength += int64(len(bytes))
+
 	return d.w.Write(bytes)
 }
 
@@ -137,6 +140,37 @@ func (d *responseWriterDecorator) Payload() []byte {
 	return d.buff.Bytes()
 }
 
-func (d *responseWriterDecorator) ContentSize() int64 {
-	return int64(len(d.buff.Bytes()))
+func (d *responseWriterDecorator) ContentLength() int64 {
+	return d.contentLength
+}
+
+type requestBodyDecorator struct {
+	buff *bytes.Buffer
+}
+
+func wrapBody(r *http.Request) (*requestBodyDecorator, error) {
+	var buff *bytes.Buffer
+	if r.ContentLength > 0 {
+		b, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			return nil, err
+		}
+		buff = bytes.NewBuffer(b)
+	}
+
+	return &requestBodyDecorator{
+		buff: buff,
+	}, nil
+}
+
+func (d *requestBodyDecorator) Read(p []byte) (n int, err error) {
+	return d.buff.Read(p)
+}
+
+func (d *requestBodyDecorator) Close() error {
+	return nil
+}
+
+func (d *requestBodyDecorator) Payload() []byte {
+	return d.buff.Bytes()
 }
