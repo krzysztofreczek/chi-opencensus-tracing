@@ -16,10 +16,15 @@ import (
 const (
 	headerNameOpencensusSpan           = "X-Opencensus-Span"
 	headerNameOpencensusSpanEventIDKey = "X-Opencensus-event-id"
+	spanRequestPayloadAttributeKey     = "event-payload"
+	spanResponsePayloadAttributeKey    = "event-response"
 )
 
 // AddTracingSpanToRequest resolves span data from the provided context and injects it to the request
-func AddTracingSpanToRequest(ctx context.Context, req *http.Request) {
+func AddTracingSpanToRequest(ctx context.Context, r *http.Request) {
+	body := decorateRequestBody(r)
+	r.Body = body
+
 	span := trace.FromContext(ctx)
 	if span == nil {
 		return
@@ -27,10 +32,13 @@ func AddTracingSpanToRequest(ctx context.Context, req *http.Request) {
 
 	eID := generateEventID()
 	eIDString := strconv.FormatInt(eID, 10)
-	req.Header.Set(headerNameOpencensusSpanEventIDKey, eIDString)
-	span.AddMessageSendEvent(eID, req.ContentLength, 0)
+	r.Header.Set(headerNameOpencensusSpanEventIDKey, eIDString)
 
-	setSpanHeader(span.SpanContext(), req)
+	// TODO: test it!
+	span.AddMessageSendEvent(eID, r.ContentLength, 0)
+	span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, string(body.Payload())))
+
+	setSpanHeader(span.SpanContext(), r)
 }
 
 // OpencensusTracing implements a simple middleware handler
@@ -60,6 +68,15 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 			}
 
 			defer func() {
+				eIDString := r.Header.Get(headerNameOpencensusSpanEventIDKey)
+				eID, _ := strconv.ParseInt(eIDString, 10, 64)
+
+				// TODO: test it!
+				span.AddMessageReceiveEvent(eID, ww.ContentLength(), 0)
+				span.AddAttributes(trace.StringAttribute(spanResponsePayloadAttributeKey, string(ww.Payload())))
+			}()
+
+			defer func() {
 				if ww.StatusCode() < 400 {
 					span.SetStatus(trace.Status{
 						Code:    trace.StatusCodeOK,
@@ -74,20 +91,10 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 				span.End()
 			}()
 
-			span.AddAttributes(trace.StringAttribute("request-payload", string(body.Payload())))
+			// TODO: test it!
+			span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, string(body.Payload())))
 
 			next.ServeHTTP(ww, r.WithContext(ctx))
-
-			var eID int64
-			eIDString := r.Header.Get(headerNameOpencensusSpanEventIDKey)
-			if eIDString != "" {
-				i, _ := strconv.ParseInt(eIDString, 10, 64)
-				// TODO!!! handle error
-				eID = i
-			}
-
-			span.AddMessageReceiveEvent(eID, ww.ContentLength(), 0)
-			span.AddAttributes(trace.StringAttribute("response-payload", string(ww.Payload())))
 		}
 
 		return http.HandlerFunc(fn)
