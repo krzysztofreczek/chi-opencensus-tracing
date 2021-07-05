@@ -65,8 +65,8 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 			}
 
 			defer closeSpan(span, ww)
-			defer addSpanMessageReceiveEvent(span, r)
 			defer setSpanResponsePayloadAttribute(span, ww)
+			defer addSpanMessageReceiveEvent(span, r)
 			defer setSpanNameAndURLAttributes(span, r)
 
 			setSpanRequestPayloadAttribute(span, body)
