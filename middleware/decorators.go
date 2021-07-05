@@ -8,10 +8,9 @@ import (
 )
 
 type responseWriterDecorator struct {
-	buff          bytes.Buffer
-	contentLength int64
-	statusCode    int
-	w             http.ResponseWriter
+	buff       bytes.Buffer
+	statusCode int
+	w          http.ResponseWriter
 }
 
 func decorateResponseWriter(w http.ResponseWriter) *responseWriterDecorator {
@@ -27,8 +26,6 @@ func (d *responseWriterDecorator) Header() http.Header {
 
 func (d *responseWriterDecorator) Write(bytes []byte) (int, error) {
 	_, _ = d.buff.Write(bytes)
-	d.contentLength += int64(len(bytes))
-
 	return d.w.Write(bytes)
 }
 
@@ -39,10 +36,6 @@ func (d *responseWriterDecorator) WriteHeader(statusCode int) {
 
 func (d *responseWriterDecorator) Payload() []byte {
 	return d.buff.Bytes()
-}
-
-func (d *responseWriterDecorator) ContentLength() int64 {
-	return d.contentLength
 }
 
 func (d *responseWriterDecorator) StatusCode() int {

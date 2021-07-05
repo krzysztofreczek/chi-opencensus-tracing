@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/go-chi/chi/v5"
 	"go.opencensus.io/trace"
 	"go.opencensus.io/trace/propagation"
 )
@@ -16,8 +17,9 @@ import (
 const (
 	headerNameOpencensusSpan           = "X-Opencensus-Span"
 	headerNameOpencensusSpanEventIDKey = "X-Opencensus-event-id"
-	spanRequestPayloadAttributeKey     = "event-payload"
-	spanResponsePayloadAttributeKey    = "event-response"
+	spanRequestPayloadAttributeKey     = "request_payload"
+	spanResponsePayloadAttributeKey    = "response_payload"
+	payloadSizeLimit                   = 1024
 )
 
 // AddTracingSpanToRequest resolves span data from the provided context and injects it to the request
@@ -30,13 +32,8 @@ func AddTracingSpanToRequest(ctx context.Context, r *http.Request) {
 		return
 	}
 
-	eID := generateEventID()
-	eIDString := strconv.FormatInt(eID, 10)
-	r.Header.Set(headerNameOpencensusSpanEventIDKey, eIDString)
-
-	// TODO: test it!
-	span.AddMessageSendEvent(eID, r.ContentLength, 0)
-	span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, string(body.Payload())))
+	addSpanMessageSentEvent(span, r)
+	setSpanRequestPayloadAttribute(span, body)
 
 	setSpanHeader(span.SpanContext(), r)
 }
@@ -56,7 +53,7 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 
 			parentSpanContext, ok := getSpanContext(r)
 			if ok {
-				ctx, span = trace.StartSpanWithRemoteParent(ctx, spanName(r), parentSpanContext)
+				ctx, span = trace.StartSpanWithRemoteParent(ctx, "", parentSpanContext)
 				span.AddLink(trace.Link{
 					TraceID:    parentSpanContext.TraceID,
 					SpanID:     parentSpanContext.SpanID,
@@ -64,45 +61,21 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 					Attributes: nil,
 				})
 			} else {
-				ctx, span = trace.StartSpan(ctx, spanName(r))
+				ctx, span = trace.StartSpan(ctx, "")
 			}
 
-			defer func() {
-				eIDString := r.Header.Get(headerNameOpencensusSpanEventIDKey)
-				eID, _ := strconv.ParseInt(eIDString, 10, 64)
+			defer closeSpan(span, ww)
+			defer addSpanMessageReceiveEvent(span, r)
+			defer setSpanResponsePayloadAttribute(span, ww)
+			defer setSpanNameAndURLAttributes(span, r)
 
-				// TODO: test it!
-				span.AddMessageReceiveEvent(eID, ww.ContentLength(), 0)
-				span.AddAttributes(trace.StringAttribute(spanResponsePayloadAttributeKey, string(ww.Payload())))
-			}()
-
-			defer func() {
-				if ww.StatusCode() < 400 {
-					span.SetStatus(trace.Status{
-						Code:    trace.StatusCodeOK,
-						Message: "OK",
-					})
-				} else {
-					span.SetStatus(trace.Status{
-						Code:    trace.StatusCodeUnknown,
-						Message: fmt.Sprintf("Response status code: %d", ww.StatusCode()),
-					})
-				}
-				span.End()
-			}()
-
-			// TODO: test it!
-			span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, string(body.Payload())))
+			setSpanRequestPayloadAttribute(span, body)
 
 			next.ServeHTTP(ww, r.WithContext(ctx))
 		}
 
 		return http.HandlerFunc(fn)
 	}
-}
-
-func spanName(r *http.Request) string {
-	return fmt.Sprintf("[%s] %s", r.Method, r.URL.String())
 }
 
 func setSpanHeader(sc trace.SpanContext, r *http.Request) {
@@ -123,6 +96,63 @@ func getSpanContext(r *http.Request) (sc trace.SpanContext, ok bool) {
 	}
 
 	return propagation.FromBinary(bin)
+}
+
+func closeSpan(span *trace.Span, w *responseWriterDecorator) {
+	if w.StatusCode() < 400 {
+		span.SetStatus(trace.Status{
+			Code:    trace.StatusCodeOK,
+			Message: "OK",
+		})
+	} else {
+		span.SetStatus(trace.Status{
+			Code:    trace.StatusCodeUnknown,
+			Message: fmt.Sprintf("Response status code: %d", w.StatusCode()),
+		})
+	}
+	span.End()
+}
+
+func addSpanMessageReceiveEvent(span *trace.Span, r *http.Request) {
+	eIDString := r.Header.Get(headerNameOpencensusSpanEventIDKey)
+	eID, _ := strconv.ParseInt(eIDString, 10, 64)
+
+	span.AddMessageReceiveEvent(eID, r.ContentLength, 0)
+}
+
+func addSpanMessageSentEvent(span *trace.Span, r *http.Request) {
+	eID := generateEventID()
+	eIDString := strconv.FormatInt(eID, 10)
+	r.Header.Set(headerNameOpencensusSpanEventIDKey, eIDString)
+
+	span.AddMessageSendEvent(eID, r.ContentLength, 0)
+}
+
+func setSpanRequestPayloadAttribute(span *trace.Span, body *requestBodyDecorator) {
+	payload := string(body.Payload())
+	if len(payload) > payloadSizeLimit {
+		payload = payload[:payloadSizeLimit]
+	}
+	span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, payload))
+}
+
+func setSpanResponsePayloadAttribute(span *trace.Span, w *responseWriterDecorator) {
+	payload := string(w.Payload())
+	if len(payload) > payloadSizeLimit {
+		payload = payload[:payloadSizeLimit]
+	}
+	span.AddAttributes(trace.StringAttribute(spanResponsePayloadAttributeKey, payload))
+}
+
+func setSpanNameAndURLAttributes(span *trace.Span, r *http.Request) {
+	rCtx := chi.RouteContext(r.Context())
+
+	spanName := fmt.Sprintf("[%s] %s", r.Method, rCtx.RoutePattern())
+	span.SetName(spanName)
+
+	for _, key := range rCtx.URLParams.Keys {
+		span.AddAttributes(trace.StringAttribute(key, rCtx.URLParam(key)))
+	}
 }
 
 func generateEventID() int64 {
