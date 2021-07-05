@@ -16,7 +16,7 @@ import (
 
 const (
 	headerNameOpencensusSpan           = "X-Opencensus-Span"
-	headerNameOpencensusSpanEventIDKey = "X-Opencensus-event-id"
+	headerNameOpencensusSpanEventIDKey = "X-Opencensus-Event-ID"
 	spanRequestPayloadAttributeKey     = "request_payload"
 	spanResponsePayloadAttributeKey    = "response_payload"
 	payloadSizeLimit                   = 1024
