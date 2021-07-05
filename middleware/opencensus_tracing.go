@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"math"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -19,7 +20,8 @@ const (
 	headerNameOpencensusSpanEventIDKey = "X-Opencensus-Event-ID"
 	spanRequestPayloadAttributeKey     = "request_payload"
 	spanResponsePayloadAttributeKey    = "response_payload"
-	payloadSizeLimit                   = 1024
+	payloadSizeLimit                   = 256
+	payloadTruncatedMessage            = "...[payload has been truncated]"
 )
 
 // AddTracingSpanToRequest resolves span data from the provided context and injects it to the request
@@ -139,7 +141,8 @@ func setSpanRequestPayloadAttribute(span *trace.Span, body *requestBodyDecorator
 func setSpanResponsePayloadAttribute(span *trace.Span, w *responseWriterDecorator) {
 	payload := string(w.Payload())
 	if len(payload) > payloadSizeLimit {
-		payload = payload[:payloadSizeLimit]
+		payload = payload[:payloadSizeLimit-len(payloadTruncatedMessage)]
+		payload += payloadTruncatedMessage
 	}
 	span.AddAttributes(trace.StringAttribute(spanResponsePayloadAttributeKey, payload))
 }
@@ -156,13 +159,9 @@ func setSpanNameAndURLAttributes(span *trace.Span, r *http.Request) {
 }
 
 func generateEventID() int64 {
-	maxUint64 := ^uint64(0)
-	maxInt64 := int64(maxUint64 >> 1)
-
-	eID, err := rand.Int(rand.Reader, big.NewInt(maxInt64))
+	eID, err := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
 	if err != nil {
 		return 0
 	}
-
 	return eID.Int64()
 }
