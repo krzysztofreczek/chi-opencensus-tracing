@@ -26,17 +26,11 @@ const (
 
 // AddTracingSpanToRequest resolves span data from the provided context and injects it to the request
 func AddTracingSpanToRequest(ctx context.Context, r *http.Request) {
-	body := decorateRequestBody(r)
-	r.Body = body
-
 	span := trace.FromContext(ctx)
 	if span == nil {
 		return
 	}
-
 	addSpanMessageSentEvent(span, r)
-	setSpanRequestPayloadAttribute(span, body)
-
 	setSpanHeader(span.SpanContext(), r)
 }
 
@@ -68,10 +62,9 @@ func OpencensusTracing() func(next http.Handler) http.Handler {
 
 			defer closeSpan(span, ww)
 			defer setSpanResponsePayloadAttribute(span, ww)
+			defer setSpanRequestPayloadAttribute(span, body)
 			defer addSpanMessageReceiveEvent(span, r)
 			defer setSpanNameAndURLAttributes(span, r)
-
-			setSpanRequestPayloadAttribute(span, body)
 
 			next.ServeHTTP(ww, r.WithContext(ctx))
 		}
@@ -118,7 +111,6 @@ func closeSpan(span *trace.Span, w *responseWriterDecorator) {
 func addSpanMessageReceiveEvent(span *trace.Span, r *http.Request) {
 	eIDString := r.Header.Get(headerNameOpencensusSpanEventIDKey)
 	eID, _ := strconv.ParseInt(eIDString, 10, 64)
-
 	span.AddMessageReceiveEvent(eID, r.ContentLength, 0)
 }
 
@@ -126,14 +118,16 @@ func addSpanMessageSentEvent(span *trace.Span, r *http.Request) {
 	eID := generateEventID()
 	eIDString := strconv.FormatInt(eID, 10)
 	r.Header.Set(headerNameOpencensusSpanEventIDKey, eIDString)
-
 	span.AddMessageSendEvent(eID, r.ContentLength, 0)
 }
 
 func setSpanRequestPayloadAttribute(span *trace.Span, body *requestBodyDecorator) {
-	payload := string(body.Payload())
-	if len(payload) > payloadSizeLimit {
-		payload = payload[:payloadSizeLimit]
+	var payload string
+	if body != nil {
+		payload = string(body.Payload())
+		if len(payload) > payloadSizeLimit {
+			payload = payload[:payloadSizeLimit]
+		}
 	}
 	span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, payload))
 }

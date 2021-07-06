@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -158,6 +159,7 @@ func TestOpencensusTracing_payload_attributes(t *testing.T) {
 	r.Use(OpencensusTracing())
 
 	r.Post("/test", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = ioutil.ReadAll(r.Body)
 		_, _ = w.Write([]byte("RESPONSE"))
 	})
 

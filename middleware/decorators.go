@@ -3,7 +3,6 @@ package middleware
 import (
 	"bytes"
 	"io"
-	"io/ioutil"
 	"net/http"
 )
 
@@ -11,6 +10,12 @@ type responseWriterDecorator struct {
 	buff       bytes.Buffer
 	statusCode int
 	w          http.ResponseWriter
+}
+
+func (d *responseWriterDecorator) Flush() {
+	if w, ok := d.w.(http.Flusher); ok {
+		w.Flush()
+	}
 }
 
 func decorateResponseWriter(w http.ResponseWriter) *responseWriterDecorator {
@@ -44,40 +49,29 @@ func (d *responseWriterDecorator) StatusCode() int {
 
 type requestBodyDecorator struct {
 	bodyBytes []byte
-	body      io.Reader
+	body      io.ReadCloser
 }
 
 func decorateRequestBody(r *http.Request) *requestBodyDecorator {
-	d := &requestBodyDecorator{
-		body: &bytes.Buffer{},
+	if r.Body == nil {
+		return nil
 	}
 
-	if r.ContentLength == 0 {
-		return d
+	return &requestBodyDecorator{
+		body: r.Body,
 	}
-
-	b, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		return d
-	}
-
-	err = r.Body.Close()
-	if err != nil {
-		return d
-	}
-
-	d.bodyBytes = b
-	d.body = bytes.NewReader(b)
-
-	return d
 }
 
-func (d *requestBodyDecorator) Read(p []byte) (n int, err error) {
-	return d.body.Read(p)
+func (d *requestBodyDecorator) Read(p []byte) (int, error) {
+	n, err := d.body.Read(p)
+	for i := 0; i < n; i++ {
+		d.bodyBytes = append(d.bodyBytes, p[i])
+	}
+	return n, err
 }
 
 func (d *requestBodyDecorator) Close() error {
-	return nil
+	return d.body.Close()
 }
 
 func (d *requestBodyDecorator) Payload() []byte {
