@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  pull_request:
+    types: [ opened, edited ]
   push:
     branches:
       - master

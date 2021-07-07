@@ -125,9 +125,10 @@ func setSpanRequestPayloadAttribute(span *trace.Span, body *requestBodyDecorator
 	var payload string
 	if body != nil {
 		payload = string(body.Payload())
-		if len(payload) > payloadSizeLimit {
-			payload = payload[:payloadSizeLimit]
-		}
+	}
+	if len(payload) > payloadSizeLimit {
+		payload = payload[:payloadSizeLimit-len(payloadTruncatedMessage)]
+		payload += payloadTruncatedMessage
 	}
 	span.AddAttributes(trace.StringAttribute(spanRequestPayloadAttributeKey, payload))
 }
