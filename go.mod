@@ -1,9 +1,9 @@
 module github.com/krzysztofreczek/chi-opencensus-tracing
 
-go 1.20
+go 1.22
 
 require (
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-chi/chi/v5 v5.2.4
 	go.opencensus.io v0.24.0
 )
 
